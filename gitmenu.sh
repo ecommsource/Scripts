@@ -22,6 +22,7 @@ INDEX=0
 # PROJECT1="xxx"
 BOLD=$(tput bold)
 NORM=$(tput sgr0)
+OPEN_ORG="(None)"
 
 ################################################################
 # Sub-functions must be declared first (Main function later)
@@ -223,11 +224,25 @@ add_project() {
 	echo "Creating Folder $TEMP2 ..."
         mkdir $TEMP2;
         chmod 777 $TEMP2
-        cd $TEMP2
+        fi
+      cd $TEMP2
+      if [ ! -d .git ]
+        then
         echo "Initializing GIT Repository ..."
         git init
         echo "Done !"
-        cd ..
+        fi
+      cd ..
+      if [ ! -f packages.txt ]
+        then
+        echo "Add packages.txt (Y/N) ? \c"; read YN2
+        if [ "$YN2" == "y" ] ; then
+          echo "04tA00000003FAY         ECS V16.93" > packages.txt;
+          echo "04t80000000ciLdAAI      eCommSource V13.96" >> packages.txt
+          echo "ECS and eCommSource Packages added to packages.txt"
+          echo "packages.txt" >> .forceignore
+          echo "packages.txt added to .forceignore file"
+          fi 
         fi
       fi
   fi
@@ -409,20 +424,25 @@ sfdx_menu() {
     clear
     header
     echo "  Salesforce DX Menu ..."
-    echo "  Curent Project: ${BOLD}$PROJECT${NORM}"
+    echo "  Curent Project: ${BOLD}$PROJECT${NORM} - Open Org: ${BOLD}$OPEN_ORG${NORM}"
     echo "+ -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- +"
     echo "  O) Open Salesforce DX DevHub (browser)."
     echo "  L) List Salesforce DX Orgs."
     echo "  C) Create a Scratch Org."
     echo "  D) Delete a Scratch Org."
-    echo "  E) View Latest Push Errors."
+    echo "  E) Export Data from Scratch Org."
+    echo "  I) Import Data into Scratch Org."
     echo "  P) Push Source to a Scratch Org."
+    echo "  U) Pull Source from a Scratch Org."
+    echo "  V) View Latest Push/Pull Errors."
+    echo "  A) Add Prerequisite Packages."
 
     echo "  Q or X) Quit (Exit SFDX Menu)"
     echo "Please Select ->\c"; read OPT4
     case $OPT4 in
         o|O) sfdx force:org:list
              echo "Please Enter Org Alias to Open ->\c";read ORGNAME
+             OPEN_ORG=$ORGNAME
 	     sfdx force:org:open -u "$ORGNAME" ; pause ;;
         l|L) sfdx force:org:list; pause ;;
         c|C) echo "Please Enter a Unique Name for this scratch org ->\c";read ORGNAME
@@ -430,15 +450,64 @@ sfdx_menu() {
              sfdx force:org:create -a "$ORGNAME" -d 30 -s -v $USER edition=Developer
              echo "NOTE: Please Copy the Username above ..."
              pause
+             if [ -f packages.txt ] ; then
+               echo "Install Prerequisite Packages (Y/N) ? \c";read YN4B
+               if [ "$YN4B" == "y" ] ; then
+                 for PKG in `cut -f 1 packages.txt`
+                   do
+                   # sfdx force:package:install --package $PKG -u Spree-Dev
+                   NAME=`grep $PKG packages.txt | cut -f 2,3,4`
+                   echo "Installing $NAME ...\c"
+                   RESULT=`sfdx force:package:install --package $PKG -u $ORGNAME`
+                   CMD=`echo $RESULT | cut -f 13-18 -d ' '`
+                   echo "CMD=$CMD"
+                   echo "waiting on package install ...\c";
+                   STAT=
+                   while [ "$STAT" == "" ]
+                     do
+                     sleep 5
+                     echo ".\c"
+                     TEMP=`eval "$CMD"`
+                     STAT1=`echo $TEMP | grep Successfully`
+                     STAT2=`echo $TEMP | grep ERROR`
+                     if [ "$STAT1" != "" -a "$STAT2" == "" ] ; then STAT=$STAT1; fi
+                     if [ "$STAT1" == "" -a "$STAT2" != "" ] ; then STAT=$STAT2; fi
+                     done
+                   if [ "$STAT2" != "" ]
+                     then
+                     echo "$NAME: $STAT2"
+                     break;
+                     fi
+                   echo " Done!"
+                   done
+                 echo "All Packages Installed !"
+                 fi
+               fi
              echo "Push This Project to $ORGNAME (Y/N) \c";read YESNO4
              if [ "$YESNO4" == "y" ] ; then 
                echo "Pushing $PROJECT Source to $ORGNAME org (This may take a while) ..."
-               sfdx force:source:push -u $ORGNAME > push_errors.txt
+               DT=`date`
+               echo "Push Request to $ORGNAME - $DT" > pull_errors.txt
+               sfdx force:source:push -u $ORGNAME >> push_errors.txt
                cat push_errors.txt
                pause
+               for FILE in *.json
+                 do
+                 YN4C=
+                 NAME=`echo $FILE | cut -f 1 -d '.'`
+                 if [ "$NAME" != "sfdx-project" ] ; then
+                   echo "Push $NAME Data to $ORGNAME (Y/N) ? \c";read YN4C
+                   if [ "$YN4C" == "y" ] ; then
+                     sfdx force:data:tree:import -f $FILE -u $ORGNAME
+                     fi
+                   fi
+                 done
              fi 
              echo "Open this org in your browser (Y/N) ? \c";read YN4A
-             if [ "$YN4A" == "y" ] ; then sfdx force:org:open -u "$ORGNAME" ; fi
+             if [ "$YN4A" == "y" ] ; then 
+               OPEN_ORG=$ORGNAME
+               sfdx force:org:open -u "$ORGNAME" 
+               fi
              ;;
         d|D) sfdx force:org:list
              echo "Please Enter Org to Delete ->\c";read ORGNAME
@@ -447,17 +516,98 @@ sfdx_menu() {
                sfdx force:org:delete -u $ORGNAME -p
                pause
              fi ;;
-        e|E) cat push_errors.txt; pause ;;
+        e|E) echo "Export Tata from Scratch Org (to Import into another Scratch Org)"
+             ORGNAME=
+             echo "Please Enter Org to Export From ->\c";read ORGNAME
+             if [ "$ORGNAME" != "" ] ; then
+               echo "Please Enter your SOQL Query:";read QUERY
+               if [ "$QUERY" != "" ] ; then
+                 RESP=`sfdx force:data:tree:export -q "$QUERY" -u $ORGNAME`
+                 echo $RESP
+                 FILE=`echo $RESP | cut -f 5 -d ' '`
+                 TEMP=`grep $FILE .forceignore`
+                 if [ "$TEMP" == "" ] ; then
+                   echo $FILE >> .forceignore
+                   echo "$FILE Added to .forceignore"
+                   fi
+                 pause
+                 fi
+               fi
+             ;;
+        i|I) echo "Import Data into a Scratch Org:"
+             ORGNAME=
+             echo "Please Enter Org to Import Into ->\c";read ORGNAME
+             if [ "$ORGNAME" != "" ] ; then
+               for FILE in *.json
+                 do
+                 YN4C=
+                 NAME=`echo $FILE | cut -f 1 -d '.'`
+                 if [ "$NAME" != "sfdx-project" ] ; then
+                   echo "Push $NAME Data to $ORGNAME (Y/N) ? \c";read YN4C
+                   if [ "$YN4C" == "y" ] ; then
+                     sfdx force:data:tree:import -f $FILE -u $ORGNAME
+                     fi
+                   fi
+                 done
+               pause
+               fi
+             ;;
         p|P) sfdx force:org:list
              echo "Please Enter Org to Push to ->\c";read ORGNAME
              echo "Are you SURE you want to PUSH to $ORGNAME (Y/N) \c";read YN4
              if [ "$YN4" == "y" ] ; then
                echo "Pushing $PROJECT Source to $ORGNAME org (This may take a while) ..."
-               sfdx force:source:push -u $ORGNAME > push_errors.txt
+               DT=`date`
+               echo "Push Request to $ORGNAME - $DT" > pull_errors.txt
+               sfdx force:source:push -u $ORGNAME >> push_errors.txt
                cat push_errors.txt
                pause
              fi ;;
-
+        u|U) sfdx force:org:list
+             echo "Please Enter Org to Pull From ->\c";read ORGNAME
+             echo "Are you SURE you want to PULL FROM $ORGNAME (Y/N) \c";read YN4
+             if [ "$YN4" == "y" ] ; then
+               echo "Pulling $PROJECT Source from $ORGNAME org (This may take a while) ..."
+               DT=`date`
+               echo "Pull Request from $ORGNAME - $DT" > pull_errors.txt
+               sfdx force:source:pull -u $ORGNAME >> pull_errors.txt
+               cat pull_errors.txt
+               pause
+             fi ;;
+        v|V) echo "View Latest Push/Pull Errors:"
+             echo "  P) View Latest PUSH Errors."
+             echo "  L) View Latest PULL Errors."
+             echo "Please Choose ->\c";read PP
+             case $PP in
+               p|P) cat push_errors.txt; pause;;
+               l|L) cat pull_errors.txt; pause;;
+               *) ;;
+             esac ;;
+        a|A) echo "Add Prerequisite Packages to deploy when creating Scratch Orgs:"
+             echo "Existing Packages (packages.txt):"
+             cat packages.txt
+             PKGID=
+             echo "Please Enter Package ID (04t...) ->\c"; read PKGID;
+             if [ "$PKGID" != "" ] ; then
+               TEMP=`grep $PKGID packages.txt`
+               if [ "$TEMP" != "" ] ; then
+                 echo "Please Enter Package Name/Version ->\c"; read PKGNAME
+                 if [ "$PKGNAME" != "" ] ; then
+                   echo "$PKGID\t$PKGNAME" >> packages.txt
+                   echo "$PKGNAME ($PKGID) Added."
+                   pause
+                 else
+                   echo "Cancelled because you didn't enter a Package Name."
+                   pause
+                   fi
+               else
+                 echo "Package $PKGID Already Exists in packages.txt"
+                 pause
+                 fi
+             else
+               echo "Cancelled because you didn't enter a Package ID."
+               fi 
+             ;;
       	q|Q|x|X) DONE4="yes";;
       	*) echo "$OPT4 is not a valid option.";pause;;
     esac
